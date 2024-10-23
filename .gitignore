@@ -1,0 +1,16 @@
+```plaintext
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+venv/
+ENV/
+env/
+
+# AWS SAM build artifacts
+.aws-sam/
+.samconfig.toml
+
+# Local environment variables
+.env

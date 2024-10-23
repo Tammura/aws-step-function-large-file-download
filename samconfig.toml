@@ -1,0 +1,13 @@
+version = 0.1
+[default.build.parameters]
+parallel = true
+cached = false
+[default.deploy.parameters]
+stack_name = "download-large-files"
+resolve_s3 = true
+s3_prefix = "download-large-files"
+region = "eu-west-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_NAMED_IAM"
+image_repositories = []
+disable_rollback = true

@@ -1,0 +1,174 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  # IAM Role for Lambda Functions
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      MaxSessionDuration: 3600
+      Description: IAM Role providing Lambda functions the necessary permissions
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+      Policies:
+        - PolicyName: CustomLambdaPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              Effect: Allow
+              Action:
+                - "ec2:DescribeInstances"
+                - "ec2:CreateNetworkInterface"
+                - "ec2:AttachNetworkInterface"
+                - "ec2:DeleteNetworkInterface"
+              Resource: "*"
+      RoleName: !Sub ${AWS::StackName}-LambdaExecutionRole
+
+  # IAM Role for Step Functions
+  StepFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:DeleteObject
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource: !Sub "arn:aws:s3:::${ExampleBucket}/*"
+
+  # Lambda Function 1: Get meta file data including file size
+  GetFileMetadataFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/lambdas/get_file_metadata/
+      Handler: app.lambda_handler
+      Runtime: python3.12
+      Timeout: 30
+      Environment:
+        Variables:
+          SFTP_HOST: !Ref SftpHost
+          SFTP_USERNAME: !Ref SftpUsername
+          SFTP_PASSWORD: !Ref SftpPassword
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:AbortMultipartUpload
+              Resource: !GetAtt ExampleBucket.Arn
+
+  # Lambda Function 2: Create file chunks
+  CreateFileChunksFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/lambdas/create_file_chunks/
+      Handler: app.lambda_handler
+      Runtime: python3.12
+      Timeout: 30
+      Environment:
+        Variables:
+          CHUNK_SIZE: 52428800 # 50MB
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !GetAtt ExampleBucket.Arn
+
+  # Lambda Function 3: Download and process chunks from SFTP
+  DownloadChunkFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-DownloadChunkFunction
+      Timeout: 900
+      CodeUri: src/lambdas/download_chunk/
+      Handler: app.lambda_handler
+      Runtime: python3.12
+      Environment:
+        Variables:
+          SFTP_HOST: !Ref SftpHost
+          SFTP_USERNAME: !Ref SftpUsername
+          SFTP_PASSWORD: !Ref SftpPassword
+      MemorySize: 1024
+      Policies:
+        - AmazonS3FullAccess
+        - AWSLambdaBasicExecutionRole
+
+  # State Machine to orchestrate Lambda functions
+  SftpDownloadStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: src/state_machines/sftp_download_definition.json
+      DefinitionSubstitutions:
+        CreateFileChunksFunction: !GetAtt CreateFileChunksFunction.Arn
+        GetFileMetadataFunction: !GetAtt GetFileMetadataFunction.Arn
+        DownloadChunkFunction: !GetAtt DownloadChunkFunction.Arn
+      Events:
+        ScheduledExecution:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 12 * * ? *)
+            ScheduleExpressionTimezone: UTC
+            Name: !Sub ${AWS::StackName}-ScheduledExecution
+            Description: Triggers the state machine to run every day at noon UTC
+            Input: >-
+              {
+                "target_s3_bucket": "example-bucket",
+                "target_s3_key": "/s3_key/file.txt",
+                "sftp_file_path": "/path/to/file.txt"
+              }
+      Role: !GetAtt StepFunctionRole.Arn
+
+  ExampleBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: download-large-files-example-bucket
+    DeletionPolicy: Retain
+
+Outputs:
+  S3BucketName:
+    Description: "S3 Bucket for large input files"
+    Value: !Ref ExampleBucket
+
+  StateMachineArn:
+    Description: "ARN della Step Function"
+    Value: !Ref SftpDownloadStateMachine
+
+Parameters:
+  SftpHost:
+    Type: String
+    Description: "Host del server SFTP"
+
+  SftpUsername:
+    Type: String
+    Description: "Username del server SFTP"
+
+  SftpPassword:
+    Type: String
+    Description: "Password del server SFTP"

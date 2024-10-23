@@ -1,0 +1,98 @@
+{
+  "Comment": "Step function to process zip file",
+  "StartAt": "Get File Metadata From SFTP",
+  "States": {
+    "Get File Metadata From SFTP": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "ResultPath": "$.file_metadata",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "${GetFileMetadataFunction}"
+      },
+      "Next": "Create chunks"
+    },
+    "Create chunks": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "ResultPath": "$.chunks",
+      "Parameters": {
+        "Payload": {
+          "file_size.$": "$.file_metadata.Payload.body.metadata.size"
+        },
+        "FunctionName": "${CreateFileChunksFunction}"
+      },
+      "Next": "Start multipart upload"
+    },
+    "Start multipart upload": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:s3:createMultipartUpload",
+      "ResultPath": "$.multipart_upload",
+      "Parameters": {
+        "Bucket.$": "$.target_s3_bucket",
+        "Key.$": "$.target_s3_key"
+      },
+      "Next": "Download chunks"
+    },
+    "Download chunks": {
+      "Type": "Map",
+      "ItemsPath": "$.chunks.Payload.body.chunks",
+      "ResultPath": "$.download_chunk_results",
+      "Parameters": {
+        "bucket_name.$": "$.target_s3_bucket",
+        "s3_file_key.$": "$.target_s3_key",
+        "sftp_file_path.$": "$.sftp_file_path",
+        "upload_id.$": "$.multipart_upload.UploadId",
+        "chunk.$": "$$.Map.Item.Value"
+      },
+      "Iterator": {
+        "StartAt": "Download single chunk from SFTP",
+        "States": {
+          "Download single chunk from SFTP": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "Payload": {
+                "bucket_name.$": "$.bucket_name",
+                "s3_file_key.$": "$.s3_file_key",
+                "sftp_file_path.$": "$.sftp_file_path",
+                "chunk_number.$": "$.chunk.chunk_number",
+                "start_byte.$": "$.chunk.start_byte",
+                "end_byte.$": "$.chunk.end_byte",
+                "upload_id.$": "$.upload_id"
+              },
+              "FunctionName": "${DownloadChunkFunction}"
+            },
+            "End": true
+          }
+        }
+      },
+      "Next": "Format multipart parts"
+    },
+    "Format multipart parts": {
+      "Type": "Pass",
+      "ResultPath": "$.formatted_parts",
+      "Parameters": {
+        "Parts.$": "$.download_chunk_results[*].Payload.body"
+      },
+      "Next": "Complete multipart upload"
+    },
+    "Complete multipart upload": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:s3:completeMultipartUpload",
+      "ResultPath": null,
+      "Parameters": {
+        "Bucket.$": "$.target_s3_bucket",
+        "Key.$": "$.target_s3_key",
+        "UploadId.$": "$.multipart_upload.UploadId",
+        "MultipartUpload": {
+          "Parts.$": "$.formatted_parts.Parts"
+        }
+      },
+      "Next": "Fine"
+    },
+    "Fine": {
+      "Type": "Succeed"
+    }
+  }
+}
