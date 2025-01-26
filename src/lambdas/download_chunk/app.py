@@ -16,7 +16,7 @@ def get_sftp_client(hostname: str, port: int, username: str, password: str) -> S
     return ssh.open_sftp()
 
 
-def download_cunk(sftp_client, sftp_file_path, start_byte, end_byte) -> Tuple[str, SFTPFile]:
+def download_chunk(sftp_client, sftp_file_path, start_byte, end_byte) -> Tuple[str, SFTPFile]:
     file_buffer = sftp_client.open(sftp_file_path, "r")
     file_buffer.seek(start_byte)
     buffer = io.BytesIO(file_buffer.read(end_byte - start_byte))
@@ -42,7 +42,7 @@ def lambda_handler(event, context):
     sftp_client = get_sftp_client(
         hostname=sftp_host, username=sftp_username, password=sftp_password, port=sftp_port)
 
-    obj = download_cunk(sftp_client, sftp_file_path, start_byte, end_byte)
+    obj = download_chunk(sftp_client, sftp_file_path, start_byte, end_byte)
     if obj:
         response = s3.upload_part(
             Bucket=bucket_name,
